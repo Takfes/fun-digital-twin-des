@@ -5,6 +5,10 @@ from make_data import generate_data
 
 # load_dotenv()
 config = dotenv_values(".env")
+FIXED_DURATION = config["FIXED_DURATION"] = bool(config["FIXED_DURATION"])
+SIMULATION_TIME = config["SIMULATION_TIME"] = float(config["SIMULATION_TIME"])
+CHECK_INTERVAL = config["CHECK_INTERVAL"] = float(config["CHECK_INTERVAL"])
+TIME_THRESHOLD = config["TIME_THRESHOLD"] = float(config["TIME_THRESHOLD"])
 LOADING_TIME = config["LOADING_TIME"] = float(config["LOADING_TIME"])
 TRAVEL_TIME = config["TRAVEL_TIME"] = float(config["TRAVEL_TIME"])
 SITE_PREP_TIME = config["SITE_PREP_TIME"] = float(config["SITE_PREP_TIME"])
@@ -17,63 +21,51 @@ def initialize_simulation():
     # env, depots, delivery_sites, trucks, tickets = setup_environment()
 
 
-# def loading_process(env, truck, depot):
-#     with depot.loading_bay.request() as request:
-#         yield request  # Wait for access to the loading bay
-#         # Assume loading time is a constant, can be replaced with a distribution
-#         yield env.timeout(
-#             LOADING_TIME
-#         )  # Replace LOADING_TIME with actual time or a distribution
-#         print(f"{env.now}: {truck.name} finished loading at {depot.name}")
-
-# def unloading_process(env, truck, delivery_site):
-#     with delivery_site.unloading_bay.request() as request:
-#         yield request  # Wait for access to the unloading bay
-#         # unloading_time = np.random.normal(
-#         #     MEAN_UNLOADING_TIME, UNLOADING_TIME_STD_DEV
-#         # )  # Replace with your distribution parameters
-#         yield env.timeout(UNLOADING_TIME)
-#         print(f"{env.now}: {truck.name} finished unloading at {delivery_site.name}")
-
-# def travel_process(env, truck, destination, travel_time):
-#     yield env.timeout(TRAVEL_TIME)  # Simulate the travel time
-#     print(f"{env.now}: {truck.name} arrived at {destination}")
+def driver_clock_in(env, truck, depot):
+    yield env.timeout(truck.clock_in_time)
+    depot.add_truck(truck)
 
 
-# Functions for Loading and Unloading Processes
+def driver_clock_out(env, truck, depot):
+    yield env.timeout(truck.clock_out_time - env.now)
+    while not truck.tasks_finished:
+        yield env.timeout(1)  # Check every 1 time unit, adjust as needed
+    depot.remove_truck(truck)
+
+
 def loading_process(env, truck, depot):
-    # Simulate truck loading at the depot
     pass
 
 
 def unloading_process(env, truck, delivery_site):
-    # Simulate truck unloading at the delivery site
     pass
 
 
-# Function for Simulating the Prep Process at the Delivery Site
 def prep_process(env, truck, destination, travel_time):
-    # Simulate the travel time of trucks between locations
     pass
 
 
-# Function for Simulating Traveling Process
 def travel_process(env, truck, destination, travel_time):
-    # Simulate the travel time of trucks between locations
     pass
 
 
-# Function to Assign Trucks to Depots
+def get_depot_by_name(depots, depot_name):
+    return next((depot for depot in depots if depot.name == depot_name), None)
+
+
+def get_delivery_site_by_name(delivery_sites, site_name):
+    return next((site for site in delivery_sites if site.name == site_name), None)
+
+
+def all_tickets_processed(tickets):
+    return all(ticket.is_assigned for ticket in tickets)
+
+
 def assign_trucks_to_depots(trucks, depots):
-    # Logic to assign each truck to its starting depot
-    # Iterate through each truck
     for truck in trucks:
-        # Find the depot that matches the truck's home depot
         home_depot = next(
             (depot for depot in depots if depot.name == truck.home_depot), None
         )
-
-        # If the matching depot is found, add the truck to the depot's list
         if home_depot:
             home_depot.add_truck(truck)
         else:
@@ -82,103 +74,101 @@ def assign_trucks_to_depots(trucks, depots):
             )
 
 
-# Function for Ticket Processing and Truck Dispatch
-def assign_tickets(env, tickets, depots, delivery_sites):
-    # Continuously go through tickets and assign them to available trucks
-    # Sorting tickets based on some criteria, e.g., due date/time
-    sorted_tickets = sorted(tickets, key=lambda x: x.due_datetime)
+def exchange_schedules(ticket, truck, trucks):
+    original_truck = next((t for t in trucks if ticket in t.scheduled_tickets), None)
+    if original_truck:
+        truck.scheduled_tickets, original_truck.scheduled_tickets = (
+            original_truck.scheduled_tickets,
+            truck.scheduled_tickets,
+        )
 
-    # Loop to continuously try to assign tickets
+
+def assign_tickets(env, tickets, depots, delivery_sites, trucks):
     while True:
-        for ticket in sorted_tickets:
-            # Check if the ticket is already assigned
-            if not ticket.is_assigned:
-                # Find the dispatch depot for the ticket
-                dispatch_depot = next(
-                    (depot for depot in depots if depot.name == ticket.dispatch_depot),
-                    None,
-                )
-
-                # If the dispatch depot is found
-                if dispatch_depot:
-                    # Attempt to get an available truck from the depot
-                    available_truck = dispatch_depot.get_available_truck()
-
-                    # If a truck is available, schedule it for the ticket and mark the ticket as assigned
-                    if available_truck:
-                        ticket.is_assigned = True
-                        env.process(
-                            truck_scheduling(
-                                env, available_truck, ticket, depots, delivery_sites
-                            )
+        for depot in depots:
+            available_truck = depot.get_available_truck()
+            if available_truck:
+                current_time = env.now
+                relevant_tickets = [
+                    t
+                    for t in tickets
+                    if t.dispatch_depot == depot.name
+                    and not t.is_assigned
+                    and t.due_datetime - current_time <= TIME_THRESHOLD
+                ]
+                sorted_tickets = sorted(relevant_tickets, key=lambda x: x.due_datetime)
+                if sorted_tickets:
+                    ticket = sorted_tickets[0]
+                    ticket.is_assigned = True
+                    ticket.actual_truck_id = available_truck.name
+                    if ticket.plan_truck_id != available_truck.name:
+                        exchange_schedules(ticket, available_truck, trucks)
+                    env.process(
+                        truck_scheduling(
+                            env, available_truck, ticket, depots, delivery_sites
                         )
-                else:
-                    print(
-                        f"Warning: Dispatch depot '{ticket.dispatch_depot}' for ticket '{ticket.ticket_id}' not found."
                     )
+                else:
+                    break  # No relevant tickets for this depot at this time
+            else:
+                break  # No more available trucks in this depot, move to next depot
+        yield env.timeout(1)
 
-        # Wait for a bit before trying to assign tickets again
-        yield env.timeout(1)  # This can be adjusted based on simulation needs
 
-
-# Function for Truck Scheduling for Each Ticket
 def truck_scheduling(env, truck, ticket, depots, delivery_sites):
-    # Process for handling the sequence of loading, traveling, unloading, and returning
-    # Start by loading the truck at its dispatch depot
-    dispatch_depot = next(
-        (depot for depot in depots if depot.name == ticket.dispatch_depot), None
-    )
+    # Wait until the ticket's due time to start processing
+    yield env.timeout(max(0, ticket.due_datetime - env.now))
+
+    # Loading at dispatch depot
+    dispatch_depot = get_depot_by_name(depots, truck.home_depot)
     if dispatch_depot:
         yield env.process(loading_process(env, truck, dispatch_depot))
     else:
         print(
-            f"Dispatch depot '{ticket.dispatch_depot}' not found for truck '{truck.name}'."
+            f"Dispatch depot '{truck.home_depot}' not found for truck '{truck.name}'."
         )
-        return  # Exit the process if depot is not found
+        return
 
-    # Travel to the delivery site
-    delivery_site = next(
-        (site for site in delivery_sites if site.name == ticket.order_id), None
-    )
+    # Travel to delivery site
+    delivery_site = get_delivery_site_by_name(delivery_sites, ticket.order_id)
     if delivery_site:
         yield env.process(
             travel_process(env, truck, delivery_site, ticket.travel_to_time)
         )
-        # Unload the truck at the delivery site
         yield env.process(unloading_process(env, truck, delivery_site))
     else:
         print(f"Delivery site '{ticket.order_id}' not found for truck '{truck.name}'.")
-        return  # Exit the process if delivery site is not found
+        return
 
-    # Travel to the return depot
-    return_depot = next(
-        (depot for depot in depots if depot.name == ticket.return_depot), None
-    )
+    # Travel to return depot
+    return_depot = get_depot_by_name(depots, ticket.return_depot)
     if return_depot:
         yield env.process(
             travel_process(env, truck, return_depot, ticket.travel_back_time)
         )
-        # Update the truck's home depot to the return depot
-        truck.home_depot = return_depot.name
-        return_depot.add_truck(truck)
+        truck.home_depot = ticket.return_depot  # Update truck's home depot
     else:
         print(
             f"Return depot '{ticket.return_depot}' not found for truck '{truck.name}'."
         )
 
 
-# Main Simulation Execution Function
 def run_simulation():
-    # Initialize the simulation environment and entities
     env, depots, delivery_sites, trucks, tickets = initialize_simulation()
-    # Assign trucks to their starting depots
     assign_trucks_to_depots(trucks, depots)
-    # Start the continuous process of assigning tickets to available trucks
+    for truck in trucks:
+        env.process(
+            driver_clock_in(env, truck, get_depot_by_name(depots, truck.home_depot))
+        )
+        env.process(
+            driver_clock_out(env, truck, get_depot_by_name(depots, truck.home_depot))
+        )
     env.process(assign_tickets(env, tickets, depots, delivery_sites))
-    # Define the simulation run duration
-    SIMULATION_TIME = 100  # Adjust as needed for your simulation
-    # Run the simulation
-    env.run(until=SIMULATION_TIME)
+    if FIXED_DURATION:
+        env.run(until=SIMULATION_TIME)
+    else:
+        while not all_tickets_processed(tickets):
+            env.run(until=env.now + CHECK_INTERVAL)
 
 
 if __name__ == "__main__":
