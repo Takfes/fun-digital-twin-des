@@ -1,0 +1,22 @@
+{
+    "editor.formatOnSave": true,
+    "python.formatting.provider": "black",
+    "python.formatting.blackArgs": [
+        "--line-length=99"
+    ],
+    "python.sortImports.args": [
+        "--profile", "black"
+    ],
+    "[python]": {
+        "editor.formatOnType": true,
+         "editor.codeActionsOnSave": {
+            "source.organizeImports": true
+        }
+    },
+    "jupyter.notebookFileRoot" : "${workspaceFolder}",
+    "python.terminal.executeInFileDir": false,
+    // "python.terminal.launchArgs": [
+    //     "-c",
+    //     "import os; os.chdir('${workspaceFolder}')"
+    // ]
+}
