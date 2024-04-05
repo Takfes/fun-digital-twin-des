@@ -1,18 +1,15 @@
 import simpy
-from dotenv import dotenv_values, load_dotenv
 
 from make_data import generate_data
 
-# load_dotenv()
-config = dotenv_values(".env")
-FIXED_DURATION = config["FIXED_DURATION"] = bool(config["FIXED_DURATION"])
-SIMULATION_TIME = config["SIMULATION_TIME"] = float(config["SIMULATION_TIME"])
-CHECK_INTERVAL = config["CHECK_INTERVAL"] = float(config["CHECK_INTERVAL"])
-TIME_THRESHOLD = config["TIME_THRESHOLD"] = float(config["TIME_THRESHOLD"])
-LOADING_TIME = config["LOADING_TIME"] = float(config["LOADING_TIME"])
-TRAVEL_TIME = config["TRAVEL_TIME"] = float(config["TRAVEL_TIME"])
-SITE_PREP_TIME = config["SITE_PREP_TIME"] = float(config["SITE_PREP_TIME"])
-UNLOADING_TIME = config["UNLOADING_TIME"] = float(config["UNLOADING_TIME"])
+FIXED_DURATION = True
+SIMULATION_TIME = 1440.0
+CHECK_INTERVAL = 10.0
+TIME_THRESHOLD = 10.0
+LOADING_TIME = 6.5
+TRAVEL_TIME = 20.0
+SITE_PREP_TIME = 12.5
+UNLOADING_TIME = 20.0
 
 
 def initialize_simulation():
