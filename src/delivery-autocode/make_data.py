@@ -1,4 +1,4 @@
-from assets.assets import *
+from assets import DeliverySite, Depot, Ticket, Truck
 
 
 def generate_data(env):
