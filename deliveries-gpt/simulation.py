@@ -1,5 +1,4 @@
 import simpy
-
 from make_data import generate_data
 
 FIXED_DURATION = True
