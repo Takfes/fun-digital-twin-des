@@ -88,7 +88,6 @@ data/
 *.xlsx
 
 # Log files
-/logs
 *.log
 
 # Other

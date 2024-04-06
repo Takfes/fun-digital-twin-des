@@ -1,4 +1,5 @@
 # DEBUG, INFO, WARNING, ERROR, CRITICAL
+import datetime
 import logging
 import random
 from dataclasses import dataclass
@@ -112,24 +113,119 @@ def sample_unloading_time(ticket, stochastic=True):
         return ticket.unload_time
 
 
-def ticket_generator(env, tickets):
+def ticket_generator_vanilla(env, tickets):
     for ticket in tickets:
         yield env.timeout(ticket.dispatch_time)
-        # yield env.timeout(0)
         env.process(ticket_process(env, ticket))
 
 
-def ticket_generator_smart(env, tickets, unloading_bay):
+def ticket_generator_qsize(env, tickets, unloading_bay):
     for ticket in tickets:
-        # Check if more than 2 tickets are waiting for the unloading bay
-        while len(unloading_bay.queue) >= 2:
-            # Wait for any ticket to be processed to check the condition again
-            yield env.timeout(
-                2
-            )  # Adjust the timeout value as needed for your simulation granularity
-
+        while len(unloading_bay.queue) >= 1:
+            yield env.timeout(2)
         yield env.timeout(ticket.dispatch_time)  # Dispatch time for the ticket
         env.process(ticket_process(env, ticket))
+
+
+def ticket_generator_estmf(env, tickets, expected_release_times):
+    for ticket in tickets:
+        yield env.timeout(ticket.dispatch_time)
+        # --------------------------------------------
+        time_to_readiness = (
+            ticket.depot_prep_time + ticket.travel_time + ticket.site_prep_time
+        )
+        max_unloading_end_time_k = get_expected_release_time(expected_release_times)[0]
+        max_unloading_end_time_v = get_expected_release_time(expected_release_times)[1]
+        logger.info(
+            f"{ticket.load_number} {env.now} WAIT:{env.now < max_unloading_end_time_v - time_to_readiness} ARV?SHTNOW:{env.now}+{time_to_readiness}={env.now+time_to_readiness} {max_unloading_end_time_k}->RLS:{max_unloading_end_time_v:.2f} => SHOOT@:{max_unloading_end_time_v-time_to_readiness:.2f}"
+        )
+        # --------------------------------------------
+        while env.now < max_unloading_end_time_v - time_to_readiness:
+            yield env.timeout(5)
+            # --------------------------------------------
+            time_to_readiness = (
+                ticket.depot_prep_time + ticket.travel_time + ticket.site_prep_time
+            )
+            max_unloading_end_time_k = get_expected_release_time(
+                expected_release_times
+            )[0]
+            max_unloading_end_time_v = get_expected_release_time(
+                expected_release_times
+            )[1]
+            logger.info(
+                f"{ticket.load_number} {env.now} WAIT:{env.now < max_unloading_end_time_v - time_to_readiness} ARV?SHTNOW:{env.now}+{time_to_readiness}={env.now+time_to_readiness} {max_unloading_end_time_k}->RLS:{max_unloading_end_time_v:.2f} => SHOOT@:{max_unloading_end_time_v-time_to_readiness:.2f}"
+            )
+            # --------------------------------------------
+            logger.info(
+                f"{ticket.load_number} {env.now} << waiting before dispatching {env.now < max_unloading_end_time_v - time_to_readiness} {max_unloading_end_time_v - time_to_readiness:.2f}"
+            )
+        logger.info(f"{ticket.load_number} {env.now} >> dispatched")
+        env.process(ticket_process(env, ticket))
+
+
+def update_expected_release_time(
+    ticket, expected_release_times, waiting_times, stage_name
+):
+    average_waiting_time = np.mean(waiting_times) if waiting_times else 0
+    average_unloading_time = (
+        np.mean(unload_times) if unload_times else ticket.unload_time
+    )
+
+    if stage_name == "depot_prep":
+        expected_release_times[f"{ticket.load_number}_{stage_name}"] = (
+            env.now
+            + ticket.travel_time
+            + ticket.site_prep_time
+            + average_unloading_time
+            + average_waiting_time
+        )
+        expected_release_times_details[f"{ticket.load_number}_{stage_name}"] = {
+            "env.now": env.now,
+            "ticket.travel_time": ticket.travel_time,
+            "ticket.site_prep_time": ticket.site_prep_time,
+            "average_unloading_time": average_unloading_time,
+            "average_waiting_time": average_waiting_time,
+            "waiting_times": waiting_times,
+            "unload_times": unload_times,
+        }
+    elif stage_name == "travel_to":
+        expected_release_times[f"{ticket.load_number}_{stage_name}"] = (
+            env.now
+            + ticket.site_prep_time
+            + average_unloading_time
+            + average_waiting_time
+        )
+        expected_release_times_details[f"{ticket.load_number}_{stage_name}"] = {
+            "env.now": env.now,
+            "ticket.travel_time": None,
+            "ticket.site_prep_time": ticket.site_prep_time,
+            "average_unloading_time": average_unloading_time,
+            "average_waiting_time": average_waiting_time,
+            "waiting_times": waiting_times,
+            "unload_times": unload_times,
+        }
+    elif stage_name == "site_prep":
+        expected_release_times[f"{ticket.load_number}_{stage_name}"] = (
+            env.now + average_unloading_time + average_waiting_time
+        )
+        expected_release_times_details[f"{ticket.load_number}_{stage_name}"] = {
+            "env.now": env.now,
+            "ticket.travel_time": None,
+            "ticket.site_prep_time": None,
+            "average_unloading_time": average_unloading_time,
+            "average_waiting_time": average_waiting_time,
+            "waiting_times": waiting_times,
+            "unload_times": unload_times,
+        }
+
+
+def get_expected_release_time(expected_release_times):
+    if expected_release_times.values():
+        max_key = max(expected_release_times, key=expected_release_times.get)
+        max_value = expected_release_times[max_key]
+        return max_key, max_value
+    else:
+        return None, 0
 
 
 def ticket_process(env, ticket):
@@ -139,48 +235,84 @@ def ticket_process(env, ticket):
         ticket_times[name] = {}
 
     start_time = env.now
-    printer.info(f"{name}: depot_prep: {start_time:.2f}")
+    stage_numb = "1"
+    stage_name = "depot_prep"
+    stage_id = f"{stage_numb}_{stage_name}"
+    printer.debug(f"{name}: {stage_name}: {start_time:.2f}")
     yield env.timeout(ticket.depot_prep_time)
-    ticket_times[name]["1.depot_prep"] = (start_time, env.now)
+    ticket_times[name][stage_id] = (start_time, env.now)
+    update_expected_release_time(
+        ticket, expected_release_times, waiting_times, stage_name
+    )
 
     start_time = env.now
-    printer.debug(f"{name}: travel_to: {start_time:.2f}")
+    stage_numb = "2"
+    stage_name = "travel_to"
+    stage_id = f"{stage_numb}_{stage_name}"
+    printer.debug(f"{name}: {stage_name}: {start_time:.2f}")
     yield env.timeout(ticket.travel_time)
-    ticket_times[name]["2.travel_to"] = (start_time, env.now)
+    ticket_times[name][stage_id] = (start_time, env.now)
+    update_expected_release_time(
+        ticket, expected_release_times, waiting_times, stage_name
+    )
 
     start_time = env.now
-    printer.debug(f"{name}: site_prepring: {start_time:.2f}")
+    stage_numb = "3"
+    stage_name = "site_prep"
+    stage_id = f"{stage_numb}_{stage_name}"
+    printer.debug(f"{name}: {stage_name}: {start_time:.2f}")
     yield env.timeout(ticket.site_prep_time)
     finish_site_prep = env.now
-    ticket_times[name]["3.site_prep"] = (start_time, finish_site_prep)
+    ticket_times[name][stage_id] = (start_time, finish_site_prep)
+    update_expected_release_time(
+        ticket, expected_release_times, waiting_times, stage_name
+    )
 
     with unloading_bay.request() as ubr:
         yield ubr
+
         start_time = env.now
+        stage_numb = "4"
+        stage_name = "waiting"
+        stage_id = f"{stage_numb}_{stage_name}"
+        printer.debug(f"{name}: {stage_name}: {start_time:.2f}")
+        ticket_times[name][stage_id] = (start_time, finish_site_prep)
         waiting_times.append(start_time - finish_site_prep)
-        ticket_times[name]["4.waiting"] = (start_time, finish_site_prep)
-        printer.debug(f"{name}: >> discharging: {start_time:.2f}")
+
+        start_time = env.now
+        stage_numb = "5"
+        stage_name = "discharging"
+        stage_id = f"{stage_numb}_{stage_name}"
+        printer.debug(f"{name}: >> {stage_name}: {start_time:.2f}")
         yield env.timeout(
             sample_unloading_time(ticket, stochastic=UNLOAD_TIME_STOCHASTIC)
         )
-        ticket_times[name]["5.discharging"] = (start_time, env.now)
+        ticket_times[name][stage_id] = (start_time, env.now)
         printer.debug(f"{name}: << leaves unloading bay at {env.now:.2f}")
         unload_times.append(env.now - start_time)
 
     start_time = env.now
-    printer.debug(f"{name}: cleaning: {start_time:.2f}")
+    stage_numb = "6"
+    stage_name = "cleaning"
+    stage_id = f"{stage_numb}_{stage_name}"
+    printer.debug(f"{name}: {stage_name}: {start_time:.2f}")
     yield env.timeout(ticket.clean_time)
-    ticket_times[name]["6.cleaning"] = (start_time, env.now)
+    ticket_times[name][stage_id] = (start_time, env.now)
+    # update_expected_release_time(ticket, expected_release_times, waiting_times)
 
     start_time = env.now
-    printer.debug(f"{name}: travel_back: {start_time:.2f}")
+    stage_numb = "7"
+    stage_name = "travel_back"
+    stage_id = f"{stage_numb}_{stage_name}"
+    printer.debug(f"{name}: {stage_name}: {start_time:.2f}")
     yield env.timeout(ticket.travel_time)
-    ticket_times[name]["7.travel_back"] = (start_time, env.now)
+    ticket_times[name][stage_id] = (start_time, env.now)
+    # update_expected_release_time(ticket, expected_release_times, waiting_times)
 
     printer.debug(f"{name}: @ticket finished: {env.now:.2f}")
 
 
-def plot_gannt(ticket_times):
+def plot_gantt(ticket_times):
     import matplotlib.dates as mdates
     from matplotlib import pyplot as plt
 
@@ -208,13 +340,13 @@ def plot_gannt(ticket_times):
 
     # Define colors for each stage
     colors = {
-        "1.depot_prep": "cyan",
-        "2.travel_to": "blue",
-        "3.site_prep": "purple",
-        "4.waiting": "magenta",
-        "5.discharging": "red",
-        "6.cleaning": "orange",
-        "7.travel_back": "green",
+        "1_depot_prep": "cyan",
+        "2_travel_to": "blue",
+        "3_site_prep": "purple",
+        "4_waiting": "magenta",
+        "5_discharging": "red",
+        "6_cleaning": "orange",
+        "7_travel_back": "green",
     }
 
     fig, ax = plt.subplots(figsize=(10, 5))  # Adjust size as needed
@@ -249,32 +381,43 @@ def plot_gannt(ticket_times):
 
 
 # GENERIC CONFIGURATION
+LOG_TO_FILE = True
+
+# LOGGING CONFIGURATION
 logger = logging.getLogger(__name__)
 # formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-formatter = logging.Formatter("%(levelname)s - %(message)s")
+# formatter = logging.Formatter("%(levelname)s - %(message)s")
+formatter = logging.Formatter("$ %(message)s")
 printer = configure_logger(
-    log_to_console=True, log_to_file=False, filename=None, level=logging.INFO
+    log_to_console=True,
+    log_to_file=LOG_TO_FILE,
+    filename=f'logs/{datetime.datetime.now().strftime("%Y.%m.%d_%H.%M.%S")}.log',
+    level=logging.WARNING,
 )
 
 # INITIATE STATISTICS
 ticket_times = {}
 waiting_times = []
 unload_times = []
+expected_release_times = {}
+expected_release_times_details = {}
 
 # SIMULATION CONFIGURATIONS
-N_LOADS = 20
+DISPATCHING_MODE = 2
+GANTT_PLOT = True
+# RANDOM_SEED = 1990
+# random.seed(RANDOM_SEED)
 
-UNLOAD_TIME = 10
+N_LOADS = 10
+UNLOAD_TIME = 15
 DEPOT_PREP_TIME = 30
-TRAVEL_TIME = 45
+TRAVEL_TIME = 25
 SITE_PREP_TIME = 15
 SITE_CLEAN_TIME = 15
 
 UNLOAD_TIME_STOCHASTIC = True
-UNLOAD_TIME_STOCHASTIC_OFFSET_FACTOR = 1.25
+UNLOAD_TIME_STOCHASTIC_OFFSET_FACTOR = 1.8
 UNLOAD_TIME_STOCHASTIC_SD_FACTOR = 0.5
-SMART_DISPATCHING = True
-GANTT_PLOT = True
 
 # MAKE DATA
 orderbook = generate_data(
@@ -292,17 +435,20 @@ env = simpy.Environment()
 unloading_bay = simpy.Resource(env, capacity=1)
 # ticket = tickets[0]
 # env.process(ticket_process(env, ticket))
-if SMART_DISPATCHING:
-    env.process(ticket_generator_smart(env, tickets, unloading_bay))
-else:
-    env.process(ticket_generator(env, tickets))
+if DISPATCHING_MODE == 0:
+    env.process(ticket_generator_vanilla(env, tickets))
+elif DISPATCHING_MODE == 1:
+    env.process(ticket_generator_qsize(env, tickets, unloading_bay))
+elif DISPATCHING_MODE == 2:
+    env.process(ticket_generator_estmf(env, tickets, expected_release_times))
+
 
 # RUN SIMULATION
 env.run()
 
 # REVIEW STATISTICS
 if GANTT_PLOT:
-    plot_gannt(ticket_times)
+    plot_gantt(ticket_times)
 
 total_waiting_time = sum(waiting_times)
 unload_times_rounded = [round(x, 1) for x in unload_times]
@@ -320,17 +466,25 @@ unload_times_theoretical = UNLOAD_TIME
 unload_times_mu = UNLOAD_TIME * UNLOAD_TIME_STOCHASTIC_OFFSET_FACTOR
 unload_times_sd = unload_times_mu * UNLOAD_TIME_STOCHASTIC_SD_FACTOR
 
-print(f"Number of loads: {N_LOADS}")
-print(f"Unload times deterministic: {unload_times_theoretical} +/- 0")
+logger.warning("")
+logger.warning(f"Dispatching mode: {DISPATCHING_MODE}")
+logger.warning(f"Number of loads: {N_LOADS}")
+logger.warning(f"Unload times deterministic: {unload_times_theoretical} +/- 0")
 if UNLOAD_TIME_STOCHASTIC:
-    print(
+    logger.warning(
         f"Unload times stochastic: [{unload_times_theoretical}] {unload_times_mu:.2f} +/- {unload_times_sd:.2f}"
     )
-print(f"Unload times: {unload_times_rounded}")
-print(f"Waiting times: {waiting_times_rounded}")
-print(f"Avg waiting time: {np.mean(waiting_times):.2f} +/- {np.std(waiting_times):.2f}")
-print(f"Total waiting time: {total_waiting_time:.2f}")
-print(f"Waiting % total theoretical: {total_waiting_time/total_theoretical_time:.2%}")
-logger.info(
+logger.warning(f"Unload times: {unload_times_rounded}")
+logger.warning(f"Waiting times: {waiting_times_rounded}")
+logger.warning(
+    f"Avg waiting time: {np.mean(waiting_times):.2f} +/- {np.std(waiting_times):.2f}"
+)
+logger.warning(f"Total waiting time: {total_waiting_time:.2f}")
+logger.warning(
     f"Waiting % total theoretical: {total_waiting_time/total_theoretical_time:.2%}"
 )
+
+logger.info("")
+logger.info(expected_release_times)
+logger.info("")
+logger.info(expected_release_times_details)
