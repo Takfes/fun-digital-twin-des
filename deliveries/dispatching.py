@@ -103,9 +103,11 @@ def create_tickets(orderbook):
 
 def sample_unloading_time(ticket, stochastic=True):
     if stochastic:
-        mu = ticket.unload_time * UNLOAD_TIME_STOCHASTIC_OFFSET_FACTOR
-        sd = mu * UNLOAD_TIME_STOCHASTIC_SD_FACTOR
-        return random.gauss(mu, sd)
+        tri_mod = ticket.unload_time * UNLOAD_TIME_STOCHASTIC_OFFSET_FACTOR
+        tri_rng = tri_mod * UNLOAD_TIME_STOCHASTIC_SD_FACTOR
+        tri_min = max(min(tri_mod - tri_rng, 0), tri_mod)
+        tri_max = tri_mod + tri_rng
+        return random.triangular(tri_min, tri_max, tri_mod)
     else:
         return ticket.unload_time
 
@@ -117,6 +119,19 @@ def ticket_generator(env, tickets):
         env.process(ticket_process(env, ticket))
 
 
+def ticket_generator_smart(env, tickets, unloading_bay):
+    for ticket in tickets:
+        # Check if more than 2 tickets are waiting for the unloading bay
+        while len(unloading_bay.queue) >= 2:
+            # Wait for any ticket to be processed to check the condition again
+            yield env.timeout(
+                2
+            )  # Adjust the timeout value as needed for your simulation granularity
+
+        yield env.timeout(ticket.dispatch_time)  # Dispatch time for the ticket
+        env.process(ticket_process(env, ticket))
+
+
 def ticket_process(env, ticket):
     name = f"{ticket.load_number}"
 
@@ -124,7 +139,7 @@ def ticket_process(env, ticket):
         ticket_times[name] = {}
 
     start_time = env.now
-    printer.debug(f"{name}: depot_prep: {start_time:.2f}")
+    printer.info(f"{name}: depot_prep: {start_time:.2f}")
     yield env.timeout(ticket.depot_prep_time)
     ticket_times[name]["1.depot_prep"] = (start_time, env.now)
 
@@ -151,11 +166,6 @@ def ticket_process(env, ticket):
         ticket_times[name]["5.discharging"] = (start_time, env.now)
         printer.debug(f"{name}: << leaves unloading bay at {env.now:.2f}")
         unload_times.append(env.now - start_time)
-
-    # start_time = env.now
-    # printer.debug(f"{name}: discharging: {env.now:.2f}")
-    # yield env.timeout(ticket.unload_time)
-    # ticket_times[name]["4.discharging"] = (start_time, env.now)
 
     start_time = env.now
     printer.debug(f"{name}: cleaning: {start_time:.2f}")
@@ -240,7 +250,8 @@ def plot_gannt(ticket_times):
 
 # GENERIC CONFIGURATION
 logger = logging.getLogger(__name__)
-formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+# formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+formatter = logging.Formatter("%(levelname)s - %(message)s")
 printer = configure_logger(
     log_to_console=True, log_to_file=False, filename=None, level=logging.INFO
 )
@@ -251,15 +262,29 @@ waiting_times = []
 unload_times = []
 
 # SIMULATION CONFIGURATIONS
-N_LOADS = 10
-UNLOAD_TIME = 15
+N_LOADS = 20
+
+UNLOAD_TIME = 10
+DEPOT_PREP_TIME = 30
+TRAVEL_TIME = 45
+SITE_PREP_TIME = 15
+SITE_CLEAN_TIME = 15
+
 UNLOAD_TIME_STOCHASTIC = True
 UNLOAD_TIME_STOCHASTIC_OFFSET_FACTOR = 1.25
-UNLOAD_TIME_STOCHASTIC_SD_FACTOR = 0.25
+UNLOAD_TIME_STOCHASTIC_SD_FACTOR = 0.5
+SMART_DISPATCHING = True
 GANTT_PLOT = True
 
 # MAKE DATA
-orderbook = generate_data(n_loads=N_LOADS, unload_time=UNLOAD_TIME)
+orderbook = generate_data(
+    n_loads=N_LOADS,
+    unload_time=UNLOAD_TIME,
+    depot_prep_time=DEPOT_PREP_TIME,
+    travel_time=TRAVEL_TIME,
+    site_prep_time=SITE_PREP_TIME,
+    site_clean_time=SITE_CLEAN_TIME,
+)
 tickets = create_tickets(orderbook)
 
 # ENVIRONMENT SETUP
@@ -267,7 +292,10 @@ env = simpy.Environment()
 unloading_bay = simpy.Resource(env, capacity=1)
 # ticket = tickets[0]
 # env.process(ticket_process(env, ticket))
-env.process(ticket_generator(env, tickets))
+if SMART_DISPATCHING:
+    env.process(ticket_generator_smart(env, tickets, unloading_bay))
+else:
+    env.process(ticket_generator(env, tickets))
 
 # RUN SIMULATION
 env.run()
