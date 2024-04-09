@@ -1,24 +1,8 @@
 import math
 import random
 
-import numpy as np
 import pandas as pd
 from faker import Faker
-
-fake = Faker()
-
-DEPOTS = 4
-AREA_BOUNDS = {
-    "lat_min": 25.90,
-    "lat_max": 26.50,
-    "lon_min": -80.00,
-    "lon_max": -80.40,
-}
-
-# 26.453936, -80.293473
-# 26.442077, -80.063882
-# 25.909135, -80.132318
-# 25.919063, -80.399438
 
 
 def haversine(lat1, lon1, lat2, lon2):
@@ -30,11 +14,11 @@ def haversine(lat1, lon1, lat2, lon2):
     ) * math.cos(math.radians(lat2)) * math.sin(dLon / 2) * math.sin(dLon / 2)
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     distance = R * c
-    return distance
+    return round(distance, 2)
 
 
-def generate_quantities():
-    n_orders = random.randint(5, 10)
+def generate_quantities(min_orders=5, max_orders=10):
+    n_orders = random.randint(min_orders, max_orders)
     quantities = [20, 40, 60, 90, 100, 120, 150, 200, 300, 400]
     probabilities = [0.14, 0.18, 0.16, 0.14, 0.12, 0.08, 0.06, 0.04, 0.04, 0.04]
     orders_discrete = [
@@ -93,73 +77,95 @@ def generate_unload_minutes(quantity):
 
 
 def generate_order(
-    n_loads: int,
-    unload_time: int,
-    depot_prep_time: int = 30,
-    site_prep_time: int = 10,
-    site_clean_time: int = 10,
-) -> pd.DataFrame:
-    """
-    Generates a dataframe with the required data.
-    """
-
-    my_range = range(1, n_loads + 1)
-    series_loads = list(my_range)
-    series_unload_minutes = [unload_time for _ in my_range]
-    series_depot_prep_time = [depot_prep_time for _ in my_range]
-    series_site_prep_time = [site_prep_time for _ in my_range]
-    series_site_clean_time = [site_clean_time for _ in my_range]
-    series_dispatch_time = [unload_time for _ in my_range]
-    series_dispatch_time.insert(0, 0)
-    series_dispatch_time.pop()
-
-    temp = pd.DataFrame(
-        {
-            "load_number": series_loads,
-            "dispatch_time": series_dispatch_time,
-            "depot_prep_time": series_depot_prep_time,
-            "site_prep_time": series_site_prep_time,
-            "unload_time": series_unload_minutes,
-            "site_clean_time": series_site_clean_time,
+    min_orders=5, max_orders=10, number_of_depots=4, minutes_per_mile=1.5, bounds=None
+):
+    if bounds is None:
+        bounds = {
+            "lat_min": 25.90,
+            "lat_max": 26.50,
+            "lon_min": -80.00,
+            "lon_max": -80.40,
         }
-    )
-    return temp
+    fake = Faker()
+    quantities = generate_quantities(min_orders, max_orders)
+    print(quantities)
+    print(f"Quantity : {sum(quantities)} | Orders : {len(quantities)}")
+    depots = generate_depot_locations(n=number_of_depots, bounds=bounds)
 
+    j = 1
+    orders = []
+    tickets = []
 
-"""
-orders :
-order_id
-due_time
-quantity
-customer
-customer_loc
-sched_loc
-unload_mins
+    for i, q in enumerate(quantities, start=1):
+        # sample delivery sites
+        delivery_sites = generate_delivery_sites(bounds=bounds, depots=depots)
 
-tickets :
-ticket_id
-load_number
-ship_loc
-return_loc
-distance
-"""
+        # make order data
+        order_id = f"order_{i:02}"
+        due_time = generate_due_time(q)
+        customer = fake.company()
+        customer_loc = delivery_sites["customer_loc"]
+        sched_loc = list(delivery_sites["distance_matrix"].keys())[0]
+        unload_minutes = generate_unload_minutes(q)
+        n_loads = int(q / 10)
+        orders.append(
+            {
+                "order_id": order_id,
+                "quantity": q,
+                "due_time": due_time,
+                "customer": customer,
+                "customer_loc": customer_loc,
+                "sched_loc": sched_loc,
+                "unload_mins": unload_minutes,
+                "n_loads": n_loads,
+            }
+        )
 
-quantities = generate_quantities()
-n_orders = len(quantities)
-print(quantities)
-print(f"Total Quantity : {sum(quantities)} across {len(quantities)} orders")
-depots = generate_depot_locations(n=DEPOTS, bounds=AREA_BOUNDS)
-generate_delivery_sites(bounds=AREA_BOUNDS, depots=depots)
+        # make ticket data
+        for i in range(1, n_loads + 1):
+            ticket_id = f"ticket_{j:02}"
+            j += 1
+            load_number = i
 
-for i, q in enumerate(quantities, start=1):
-    delivery_sites = generate_delivery_sites(bounds=AREA_BOUNDS, depots=depots)
+            if q > 100:
+                ship_loc = random.choices(
+                    list(depots.keys())[:2], weights=[0.8, 0.2], k=1
+                )[0]
+                return_loc = random.choices(
+                    list(depots.keys())[:3], weights=[0.7, 0.2, 0.1], k=1
+                )[0]
+                distance_to = delivery_sites["distance_matrix"][ship_loc]
+                distance_back = delivery_sites["distance_matrix"][return_loc]
+                travel_minutes_to = round(distance_to * minutes_per_mile, 2)
+                travel_minutes_back = round(distance_back * minutes_per_mile, 2)
+            else:
+                ship_loc = list(depots.keys())[0]
+                return_loc = random.choices(
+                    list(depots.keys())[:2], weights=[0.8, 0.2], k=1
+                )[0]
+                distance_to = delivery_sites["distance_matrix"][ship_loc]
+                distance_back = delivery_sites["distance_matrix"][return_loc]
+                travel_minutes_to = round(distance_to * minutes_per_mile, 2)
+                travel_minutes_back = round(distance_back * minutes_per_mile, 2)
 
-    order_id = f"order_{i:02}"
-    due_time = generate_due_time(q)
-    customer = fake.company()
-    customer_loc = delivery_sites["customer_loc"]
-    sched_loc = list(delivery_sites["distance_matrix"].keys())[0]
-    unload_minutes = generate_unload_minutes(q)
-    n_loads = int(q / 10)
+            tickets.append(
+                {
+                    "order_id": order_id,
+                    "ticket_id": ticket_id,
+                    "load_number": load_number,
+                    "ship_loc": ship_loc,
+                    "return_loc": return_loc,
+                    "distance_to": distance_to,
+                    "distance_back": distance_back,
+                    "travel_minutes_to": travel_minutes_to,
+                    "travel_minutes_back": travel_minutes_back,
+                }
+            )
 
-    generate_order(n_loads, unload_minutes)
+    data = {}
+    data["orders"] = orders_df = pd.DataFrame(orders)
+    data["tickets"] = tickets_df = pd.DataFrame(tickets)
+    data["dataset"] = orders_df.merge(tickets_df, on="order_id")
+    data["depots"] = depots
+
+    return data
