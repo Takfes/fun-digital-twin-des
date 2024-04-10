@@ -76,7 +76,17 @@ def generate_unload_minutes(quantity):
         return random.randint(45, 60)
 
 
-def generate_order(
+def generate_trucks():
+    """
+    truck_id
+    homeplant
+    clock_in
+    clock_out
+    """
+    pass
+
+
+def generate_data(
     min_orders=5, max_orders=10, number_of_depots=4, minutes_per_mile=1.5, bounds=None
 ):
     if bounds is None:
