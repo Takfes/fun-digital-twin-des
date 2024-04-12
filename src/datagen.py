@@ -4,6 +4,8 @@ import random
 import pandas as pd
 from faker import Faker
 
+# ! TODO : Generate Truck Clockins
+
 
 def haversine(lat1, lon1, lat2, lon2):
     R = 3959.87433
