@@ -23,6 +23,8 @@ class Ticket:
     distance_back: float
     travel_back_mins: int
     # simulation quantities tracking
+    sim_status: str = None
+    sim_enter_queue_time: int = None
     sim_ticket_start_time: int = None
     sim_ticket_arrive_time: int = None
     sim_load_mins: int = None
@@ -67,21 +69,6 @@ class Order:
 
 
 @dataclass
-class Hub:
-    env: simpy.Environment
-    tickets: List[Ticket]
-
-    def ticket_generator(self, tickets):
-        """
-        spawn tickets in the simulation
-        can accommodate different logics :
-        vanilla, track site queue, track site progress
-        # ! push tickets to Depot queues
-        """
-        pass
-
-
-@dataclass
 class Truck:
     env: simpy.Environment
     truck_id: str
@@ -104,6 +91,26 @@ class Truck:
         pass
 
 
+@dataclass
+class Depot:
+    env: simpy.Environment
+    depot_id: str
+    depot_lon: float
+    depot_lat: float
+    loader_capacity: int = 1
+
+    def __post_init__(self):
+        self.ticket_queue = simpy.Store(self.env)
+        self.loading_bay = simpy.Resource(self.env, capacity=self.loader_capacity)
+
+    def add_ticket(self, ticket: Ticket) -> None:
+        self.ticket_queue.put(ticket)
+
+    @property
+    def queue_size(self) -> int:
+        return len(self.ticket_queue.items)
+
+
 # @dataclass
 # class Fleet:
 #     env: simpy.Environment
@@ -121,27 +128,19 @@ class Truck:
 #         self.current_location = self.home_depot
 
 
-@dataclass
-class Depot:
-    env: simpy.Environment
-    depot_id: str
-    depot_lon: float
-    depot_lat: float
-    loader_capacity: int = 1
+# @dataclass
+# class Hub:
+#     env: simpy.Environment
+#     tickets: List[Ticket]
 
-    def __post_init__(self):
-        self.ticket_queue = simpy.PriorityStore(self.env)
-        self.loading_bay = simpy.Resource(self.env, capacity=self.loader_capacity)
-
-    def add_ticket(self):
-        pass
-
-    def truck_assignment(self):
-        """
-        assign trucks to tickets
-        monitors ticket queues and truck availability, assigning tickets to trucks based on predefined rules or priorities.
-        """
-        pass
+#     def ticket_generator(self, tickets):
+#         """
+#         spawn tickets in the simulation
+#         can accommodate different logics :
+#         vanilla, track site queue, track site progress
+#         push tickets to Depot queues
+#         """
+#         pass
 
 
 @dataclass
@@ -158,12 +157,12 @@ class SimEngine:
     trucks: List[Truck] = None
 
     def __post_init__(self):
-        self.tickets = self.create_ticket_obj(self.ticketlist)
-        self.orders = self.create_order_obj(self.orderlist, self.tickets)
-        self.depots = self.create_depot_obj(self.depotlist)
-        self.trucks = self.create_truck_obj(self.trucklist)
+        self.tickets = self._create_ticket_obj(self.ticketlist)
+        self.orders = self._create_order_obj(self.orderlist, self.tickets)
+        self.depots = self._create_depot_obj(self.depotlist)
+        self.trucks = self._create_truck_obj(self.trucklist)
 
-    def create_ticket_obj(self, ticketlist):
+    def _create_ticket_obj(self, ticketlist):
         tickets = []
         for _, row in ticketlist.iterrows():
             ticket = Ticket(
@@ -186,7 +185,7 @@ class SimEngine:
             tickets.append(ticket)
         return tickets
 
-    def create_order_obj(self, orderlist, tickets):
+    def _create_order_obj(self, orderlist, tickets):
         orders = []
         for _, row in orderlist.iterrows():
             order = Order(
@@ -207,7 +206,7 @@ class SimEngine:
             orders.append(order)
         return orders
 
-    def create_depot_obj(self, depotlist):
+    def _create_depot_obj(self, depotlist):
         depots = []
         for _, row in depotlist.iterrows():
             depot = Depot(
@@ -219,7 +218,7 @@ class SimEngine:
             depots.append(depot)
         return depots
 
-    def create_truck_obj(self, trucklist):
+    def _create_truck_obj(self, trucklist):
         trucks = []
         for _, row in trucklist.iterrows():
             truck = Truck(
@@ -246,3 +245,38 @@ class SimEngine:
 
     def get_truck(self, truck_id: str) -> Truck:
         return [truck for truck in self.trucks if truck.truck_id == truck_id][0]
+
+    def ticket_generator(self):
+        """
+        spawn tickets in the simulation
+        can accommodate different logics :
+        vanilla, track site queue, track site progress
+        """
+        env = self.env
+
+        # Sort tickets by start time before processing
+        # sorted_tickets = sorted(self.tickets, key=lambda x: x.ticket_start_time)
+        # ? Assuming tickets are pre-sorted
+        last_time = 0  # Track the last processed ticket time
+
+        for ticket in self.tickets:
+            # Calculate the time to wait until the ticket's start time
+            wait_time = max(0, ticket.ticket_start_time - last_time)
+            # print(f"< {ticket.ticket_id} @ {env.now} continue in : {wait_time}")
+            yield env.timeout(wait_time)
+            last_time = ticket.ticket_start_time
+
+            depot = self.get_depot(ticket.ship_loc)
+            if ticket.sim_status is None:
+                ticket.sim_status = "scheduled"
+                depot.add_ticket(ticket)
+                # print(f"> {ticket.ticket_id} enters queue {depot.depot_id} @ {env.now}")
+                # print(f"$ {depot.depot_id} queue size: {depot.queue_size}")
+                # print()
+
+    def truck_assignment(self):
+        """
+        assign trucks to tickets
+        monitors ticket queues and truck availability, assigning tickets to trucks based on predefined rules or priorities.
+        """
+        pass

@@ -37,7 +37,7 @@ def generate_depot_locations(n, bounds):
     for i in range(1, n + 1):
         lat = round(random.uniform(bounds["lat_min"], bounds["lat_max"]), 8)
         lon = round(random.uniform(bounds["lon_min"], bounds["lon_max"]), 8)
-        depots[f"depot_{i}"] = (lat, lon)
+        depots[f"depot_{i:02}"] = (lat, lon)
     return depots
 
 
@@ -175,15 +175,21 @@ def generate_data(
             # generate ship and return locations
             if q > 100:
                 ship_loc = random.choices(
-                    list(depots.keys())[:2], weights=[0.8, 0.2], k=1
+                    list(delivery_sites["distance_matrix"].keys())[:2],
+                    weights=[0.8, 0.2],
+                    k=1,
                 )[0]
                 return_loc = random.choices(
-                    list(depots.keys())[:3], weights=[0.7, 0.2, 0.1], k=1
+                    list(delivery_sites["distance_matrix"].keys())[:3],
+                    weights=[0.7, 0.2, 0.1],
+                    k=1,
                 )[0]
             else:
-                ship_loc = list(depots.keys())[0]
+                ship_loc = list(delivery_sites["distance_matrix"].keys())[0]
                 return_loc = random.choices(
-                    list(depots.keys())[:2], weights=[0.8, 0.2], k=1
+                    list(delivery_sites["distance_matrix"].keys())[:2],
+                    weights=[0.8, 0.2],
+                    k=1,
                 )[0]
 
             # calculate travel duration based on site distance
@@ -223,7 +229,9 @@ def generate_data(
 
     data = {}
     data["orders"] = pd.DataFrame(orders)
-    data["tickets"] = pd.DataFrame(tickets)
+    data["tickets"] = pd.DataFrame(tickets).sort_values(
+        by=["ticket_start_time", "order_id"]
+    )
     data["depots"] = (
         pd.DataFrame(depots)
         .T.reset_index()
