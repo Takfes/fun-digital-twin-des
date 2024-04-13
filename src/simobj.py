@@ -91,11 +91,15 @@ class Truck:
 class Fleet:
     env: simpy.Environment
     clockins: pd.DataFrame
+    trucks: List[Truck]
 
     def __post_init__(self):
-        self.store = simpy.FilterStore(self.env)
+        self.in_yard = simpy.FilterStore(self.env)
 
-    def create_truck_obj():
+    def create_truck_obj(self) -> List[Truck]:
+        pass
+
+    def request_truck(self, depot: str) -> Truck:
         pass
 
     def truck_clock_in(self):
