@@ -65,6 +65,14 @@ def generate_due_time(quantity):
         return random.randint(12, 14)
 
 
+def generate_load_minutes():
+    return round(random.triangular(3, 11, 6))
+
+
+def generate_site_prep_minutes():
+    return round(random.triangular(1, 30, 10))
+
+
 def generate_unload_minutes(quantity):
     if quantity >= 170:
         return random.randint(5, 15)
@@ -76,27 +84,23 @@ def generate_unload_minutes(quantity):
         return random.randint(45, 60)
 
 
-def generate_load_minutes():
+def generate_site_clean_minutes():
     return round(random.triangular(3, 11, 6))
-
-
-def generate_site_prep_minutes():
-    return round(random.triangular(1, 30, 10))
 
 
 def generate_trucks(number_of_trucks, depots):
     trucks = []
     for t in range(1, number_of_trucks + 1):
         truck_id = f"truck_{t:02}"
-        homeplant = random.choices(list(depots.keys()))[0]
-        clock_in = random.randint(1, 5)
-        clock_out = random.randint(13, 17)
+        home_depot = random.choices(list(depots.keys()))[0]
+        clock_in_time = random.randint(1, 5)
+        clock_out_time = random.randint(13, 17)
         trucks.append(
             {
                 "truck_id": truck_id,
-                "homeplant": homeplant,
-                "clock_in": clock_in,
-                "clock_out": clock_out,
+                "home_depot": home_depot,
+                "clock_in_time": clock_in_time,
+                "clock_out_time": clock_out_time,
             }
         )
     return pd.DataFrame(trucks)
@@ -119,8 +123,8 @@ def generate_data(
         }
     fake = Faker()
     quantities = generate_quantities(min_orders, max_orders)
-    print(quantities)
-    print(f"Quantity : {sum(quantities)} | Orders : {len(quantities)}")
+    # print(quantities)
+    # print(f"Quantity : {sum(quantities)} | Orders : {len(quantities)}")
     depots = generate_depot_locations(n=number_of_depots, bounds=bounds)
 
     j = 1
@@ -141,6 +145,7 @@ def generate_data(
         load_minutes = generate_load_minutes()
         site_prep_minutes = generate_site_prep_minutes()
         unload_minutes = generate_unload_minutes(q)
+        site_clean_minutes = generate_site_clean_minutes()
         n_loads = int(q / 10)
 
         # append orders
@@ -153,9 +158,10 @@ def generate_data(
                 "customer": customer,
                 "customer_loc": customer_loc,
                 "sched_loc": sched_loc,
-                "load_minutes": load_minutes,
-                "site_prep_minutes": site_prep_minutes,
+                "load_mins": load_minutes,
+                "site_prep_mins": site_prep_minutes,
                 "unload_mins": unload_minutes,
+                "site_clean_mins": site_clean_minutes,
                 "n_loads": n_loads,
             }
         )
@@ -183,15 +189,15 @@ def generate_data(
             # calculate travel duration based on site distance
             distance_to = delivery_sites["distance_matrix"][ship_loc]
             distance_back = delivery_sites["distance_matrix"][return_loc]
-            travel_minutes_to = round(distance_to * minutes_per_mile)
-            travel_minutes_back = round(distance_back * minutes_per_mile)
+            travel_to_minutes = round(distance_to * minutes_per_mile)
+            travel_back_minutes = round(distance_back * minutes_per_mile)
 
             # calculate ticket timestamps
             ticket_arrive_time = due_time_mins + (load_number - 1) * unload_minutes
             ticket_start_time = (
                 ticket_arrive_time
                 - load_minutes
-                - travel_minutes_to
+                - travel_to_minutes
                 - site_prep_minutes
             )
 
@@ -202,22 +208,27 @@ def generate_data(
                     "load_number": load_number,
                     "ticket_start_time": ticket_start_time,
                     "ticket_arrive_time": ticket_arrive_time,
-                    "load_minutes": load_minutes,
-                    "site_prep_minutes": site_prep_minutes,
+                    "load_mins": load_minutes,
+                    "site_prep_mins": site_prep_minutes,
                     "unload_mins": unload_minutes,
+                    "site_clean_mins": site_clean_minutes,
                     "ship_loc": ship_loc,
                     "distance_to": distance_to,
-                    "travel_minutes_to": travel_minutes_to,
+                    "travel_to_mins": travel_to_minutes,
                     "return_loc": return_loc,
                     "distance_back": distance_back,
-                    "travel_minutes_back": travel_minutes_back,
+                    "travel_back_mins": travel_back_minutes,
                 }
             )
 
     data = {}
     data["orders"] = pd.DataFrame(orders)
     data["tickets"] = pd.DataFrame(tickets)
-    data["depots"] = pd.DataFrame(depots).T.rename(columns={0: "lat", 1: "lon"})
+    data["depots"] = (
+        pd.DataFrame(depots)
+        .T.reset_index()
+        .rename(columns={"index": "depot_id", 0: "depot_lat", 1: "depot_lon"})
+    )
 
     if number_of_trucks is None:
         number_of_trucks = round(data["tickets"].shape[0] / 2)
